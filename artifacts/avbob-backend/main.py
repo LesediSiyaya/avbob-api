@@ -3,24 +3,27 @@
 #  FastAPI backend server
 # ============================================================
 import os
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi                  import FastAPI
 from fastapi.middleware.cors  import CORSMiddleware
 from fastapi.responses        import HTMLResponse, RedirectResponse
 
-from database         import init_db, get_all_leads, get_stats
-from routes.analyze   import router as analyze_router
-from routes.replies   import router as replies_router
-from routes.whatsapp  import router as whatsapp_router
-from routes.leads     import router as leads_router
-from routes.facebook  import router as facebook_router
+from database                  import init_db, get_all_leads, get_stats
+from routes.analyze            import router as analyze_router
+from routes.replies            import router as replies_router
+from routes.whatsapp           import router as whatsapp_router
+from routes.leads              import router as leads_router
+from routes.facebook           import router as facebook_router, start_polling_loop
 
 
 # ── Startup / shutdown ─────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    if os.getenv("FB_PAGE_ACCESS_TOKEN"):
+        asyncio.create_task(start_polling_loop())
     yield
 
 

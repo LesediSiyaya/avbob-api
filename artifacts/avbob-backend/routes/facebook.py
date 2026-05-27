@@ -1,103 +1,146 @@
 # ============================================================
-#  Routes: /webhook/facebook
-#  Receives real-time page post events from Facebook Graph API
+#  Routes: /facebook/poll  /webhook/facebook
+#  Polls your Facebook Page for new posts every 10 minutes
 #  and scores them as leads automatically.
-#
-#  Setup:
-#   1. Create a Facebook Developer App at developers.facebook.com
-#   2. Add the "Facebook Login for Business" product
-#   3. Under Webhooks, subscribe to the "feed" field on your Page
-#   4. Set the callback URL to:
-#        https://zip-hub--lesedisiyaya.replit.app/webhook/facebook
-#   5. Set your FB_VERIFY_TOKEN (any random string you choose)
-#   6. Get a Page Access Token and set FB_PAGE_ACCESS_TOKEN
 # ============================================================
 import os
 import logging
-from fastapi           import APIRouter, Request, Response, HTTPException
-from database          import insert_lead, lead_exists
-from ai.engine         import analyze_lead
+import asyncio
+import httpx
+from fastapi        import APIRouter, Request, Response, HTTPException
+from database       import insert_lead, lead_exists
+from ai.engine      import analyze_lead
 
 logger = logging.getLogger("avbob.facebook")
-router = APIRouter(prefix="/webhook")
+router = APIRouter()
 
-FB_VERIFY_TOKEN = os.getenv("FB_VERIFY_TOKEN", "")
+FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN", "")
+FB_VERIFY_TOKEN      = os.getenv("FB_VERIFY_TOKEN", "")
+GRAPH_URL            = "https://graph.facebook.com/v19.0"
 
 
-# ── Webhook verification (Facebook sends this once on setup) ───
-@router.get("/facebook", tags=["Facebook"])
+# ── Core polling logic (shared by background task + manual trigger) ─
+async def poll_facebook_page() -> dict:
+    if not FB_PAGE_ACCESS_TOKEN:
+        logger.error("FB_PAGE_ACCESS_TOKEN is not set — cannot poll")
+        return {"status": "error", "reason": "FB_PAGE_ACCESS_TOKEN not configured"}
+
+    params = {
+        "access_token": FB_PAGE_ACCESS_TOKEN,
+        "fields": "message,from,permalink_url,created_time",
+        "limit": 25,
+    }
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(f"{GRAPH_URL}/me/feed", params=params)
+
+    if r.status_code != 200:
+        logger.error("Facebook API error %s: %s", r.status_code, r.text)
+        return {"status": "error", "reason": f"Facebook API returned {r.status_code}"}
+
+    posts = r.json().get("data", [])
+    saved = 0
+    skipped = 0
+
+    for post in posts:
+        post_text = (post.get("message") or "").strip()
+        if not post_text:
+            skipped += 1
+            continue
+
+        if lead_exists(post_text):
+            skipped += 1
+            continue
+
+        author    = (post.get("from") or {}).get("name", "Unknown")
+        post_url  = post.get("permalink_url", "")
+
+        try:
+            analysis = await analyze_lead(
+                post_text        = post_text,
+                author           = author,
+                matched_keywords = [],
+            )
+            insert_lead(
+                name         = author if author != "Unknown" else None,
+                post_text    = post_text,
+                post_url     = post_url,
+                lead_score   = analysis["score"],
+                intent_level = analysis["intent"],
+                language     = analysis.get("language", "en"),
+            )
+            saved += 1
+            logger.info("Lead saved from FB poll — %s (score=%s)", author, analysis["score"])
+        except Exception as exc:
+            logger.error("Failed to process post: %s", exc)
+            skipped += 1
+
+    logger.info("FB poll complete: saved=%d skipped=%d", saved, skipped)
+    return {"status": "ok", "saved": saved, "skipped": skipped, "total_posts": len(posts)}
+
+
+# ── Background polling task (runs every 10 minutes) ────────────
+async def start_polling_loop():
+    await asyncio.sleep(10)
+    while True:
+        try:
+            logger.info("Running scheduled Facebook poll…")
+            await poll_facebook_page()
+        except Exception as exc:
+            logger.error("Polling loop error: %s", exc)
+        await asyncio.sleep(600)
+
+
+# ── Manual trigger endpoint ─────────────────────────────────────
+@router.post("/facebook/poll", tags=["Facebook"])
+async def route_poll():
+    """Manually trigger a Facebook page poll right now."""
+    result = await poll_facebook_page()
+    return result
+
+
+# ── Webhook verification (kept for future use) ──────────────────
+@router.get("/webhook/facebook", tags=["Facebook"])
 def fb_verify(request: Request):
     mode      = request.query_params.get("hub.mode")
     token     = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
 
     if not FB_VERIFY_TOKEN:
-        logger.error("FB_VERIFY_TOKEN is not set")
         raise HTTPException(status_code=500, detail="FB_VERIFY_TOKEN not configured")
-
     if mode == "subscribe" and token == FB_VERIFY_TOKEN:
-        logger.info("Facebook webhook verified successfully")
+        logger.info("Facebook webhook verified")
         return Response(content=challenge, media_type="text/plain")
-
-    logger.warning("Facebook webhook verification failed — token mismatch")
     raise HTTPException(status_code=403, detail="Verification failed")
 
 
-# ── Incoming post events ────────────────────────────────────────
-@router.post("/facebook", tags=["Facebook"])
+@router.post("/webhook/facebook", tags=["Facebook"])
 async def fb_events(request: Request):
     body = await request.json()
-
     if body.get("object") != "page":
-        return {"status": "ignored", "reason": "not a page event"}
-
-    saved = 0
-    skipped = 0
-
+        return {"status": "ignored"}
+    saved = skipped = 0
     for entry in body.get("entry", []):
         for change in entry.get("changes", []):
             if change.get("field") != "feed":
                 continue
-
-            value = change.get("value", {})
-
-            post_text = value.get("message", "").strip()
-            if not post_text:
+            value     = change.get("value", {})
+            post_text = (value.get("message") or "").strip()
+            if not post_text or lead_exists(post_text):
                 skipped += 1
                 continue
-
-            if lead_exists(post_text):
-                skipped += 1
-                logger.info("Duplicate post — skipped")
-                continue
-
-            author      = value.get("from", {}).get("name", "Unknown")
-            post_id     = value.get("post_id", "")
-            permalink   = value.get("permalink_url", "")
-
-            post_url = permalink or (
-                f"https://www.facebook.com/{post_id.replace('_', '/posts/')}"
-                if post_id else ""
-            )
-
+            author   = (value.get("from") or {}).get("name", "Unknown")
+            post_url = value.get("permalink_url", "")
             try:
-                analysis = await analyze_lead(
-                    post_text        = post_text,
-                    author           = author,
-                    matched_keywords = [],
-                )
+                analysis = await analyze_lead(post_text=post_text, author=author, matched_keywords=[])
                 insert_lead(
-                    name         = author if author != "Unknown" else None,
-                    post_text    = post_text,
-                    post_url     = post_url,
-                    lead_score   = analysis["score"],
-                    intent_level = analysis["intent"],
-                    language     = analysis.get("language", "en"),
+                    name=author if author != "Unknown" else None,
+                    post_text=post_text, post_url=post_url,
+                    lead_score=analysis["score"], intent_level=analysis["intent"],
+                    language=analysis.get("language", "en"),
                 )
                 saved += 1
-                logger.info("Lead saved from Facebook post by %s (score=%s)", author, analysis["score"])
             except Exception as exc:
-                logger.error("Failed to process Facebook post: %s", exc)
+                logger.error("Webhook post error: %s", exc)
                 skipped += 1
-
     return {"status": "ok", "saved": saved, "skipped": skipped}

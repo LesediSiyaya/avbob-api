@@ -10,12 +10,13 @@ from fastapi                  import FastAPI
 from fastapi.middleware.cors  import CORSMiddleware
 from fastapi.responses        import HTMLResponse, RedirectResponse
 
-from database                  import init_db, get_all_leads, get_stats
+from database                  import init_db, get_all_leads, get_stats, get_setting
 from routes.analyze            import router as analyze_router
 from routes.replies            import router as replies_router
 from routes.whatsapp           import router as whatsapp_router
 from routes.leads              import router as leads_router
 from routes.facebook           import router as facebook_router, start_polling_loop
+from routes.settings           import router as settings_router
 
 
 # ── Startup / shutdown ─────────────────────────────────────────
@@ -49,6 +50,7 @@ app.include_router(replies_router,  tags=["Reply Generation"])
 app.include_router(whatsapp_router, tags=["WhatsApp"])
 app.include_router(leads_router,    tags=["CRM"])
 app.include_router(facebook_router, tags=["Facebook"])
+app.include_router(settings_router, tags=["Settings"])
 
 
 # ── Root → dashboard redirect ──────────────────────────────────
@@ -68,6 +70,13 @@ def health():
 def dashboard():
     leads = get_all_leads(limit=200)
     stats = get_stats()
+    fb_token = get_setting("fb_page_access_token") or os.getenv("FB_PAGE_ACCESS_TOKEN", "")
+    fb_banner = "" if fb_token else (
+        '<div style="background:#7c2d12;color:#fca5a5;padding:10px 28px;font-size:12px;font-weight:700;">'
+        '⚠️  Facebook token not set — auto-polling is disabled. '
+        '<a href="/settings" style="color:#fde68a;text-decoration:underline">Go to Settings →</a>'
+        '</div>'
+    )
     ai_warning = "" if os.getenv("OPENAI_API_KEY") else (
         '<div style="background:#7c2d12;color:#fca5a5;padding:10px 28px;font-size:12px;font-weight:700;">'
         '⚠️  OPENAI_API_KEY is not set — AI scoring is disabled. Add it in your deployment Secrets to enable full analysis.'
@@ -130,13 +139,17 @@ def dashboard():
   </style>
 </head>
 <body>
+  {fb_banner}
   {ai_warning}
   <div class="header">
     <div>
       <div class="logo">🤝 AVBOB Lead Assistant</div>
       <div class="subtitle">CRM Dashboard — Powered by AI</div>
     </div>
-    <button class="refresh" onclick="location.reload()">↻ Refresh</button>
+    <div style="display:flex;gap:10px;align-items:center">
+      <a href="/settings" style="color:#94a3b8;text-decoration:none;font-size:12px;font-weight:600;padding:6px 14px;border:1px solid #1e2d45;border-radius:7px">⚙ Settings</a>
+      <button class="refresh" onclick="triggerPoll()">↻ Refresh</button>
+    </div>
   </div>
 
   <div class="stats">
@@ -160,5 +173,24 @@ def dashboard():
       <tbody>{rows}</tbody>
     </table>
   </div>
+  <script>
+    async function triggerPoll() {{
+      const btn = document.querySelector('.refresh');
+      btn.textContent = '⏳ Polling…';
+      btn.disabled = true;
+      try {{
+        const r = await fetch('/facebook/poll', {{method:'POST'}});
+        const d = await r.json();
+        if (d.status === 'ok') {{
+          btn.textContent = `✅ ${{d.saved}} new lead${{d.saved !== 1 ? 's' : ''}} found`;
+        }} else {{
+          btn.textContent = '❌ Poll failed';
+        }}
+      }} catch(e) {{
+        btn.textContent = '❌ Error';
+      }}
+      setTimeout(() => location.reload(), 1200);
+    }}
+  </script>
 </body>
 </html>"""

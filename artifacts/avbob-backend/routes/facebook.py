@@ -8,7 +8,7 @@ import logging
 import asyncio
 import httpx
 from fastapi        import APIRouter, Request, Response, HTTPException
-from database       import insert_lead, lead_exists
+from database       import insert_lead, lead_exists, get_setting
 from ai.engine      import analyze_lead
 
 logger = logging.getLogger("avbob.facebook")
@@ -19,7 +19,7 @@ GRAPH_URL = "https://graph.facebook.com/v19.0"
 
 # ── Core polling logic (shared by background task + manual trigger) ─
 async def poll_facebook_page() -> dict:
-    FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN", "")
+    FB_PAGE_ACCESS_TOKEN = get_setting("fb_page_access_token") or os.getenv("FB_PAGE_ACCESS_TOKEN", "")
     if not FB_PAGE_ACCESS_TOKEN:
         logger.error("FB_PAGE_ACCESS_TOKEN is not set — cannot poll")
         return {"status": "error", "reason": "FB_PAGE_ACCESS_TOKEN not configured"}

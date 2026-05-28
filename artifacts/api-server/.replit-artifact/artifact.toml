@@ -11,3 +11,17 @@ paths = ["/"]
 
 [services.development]
 run = "cd /home/runner/workspace/artifacts/avbob-backend && uvicorn main:app --host 0.0.0.0 --port 5000 --reload"
+
+[services.production]
+
+[services.production.build]
+args = ["pip", "install", "-r", "artifacts/avbob-backend/requirements.txt"]
+
+[services.production.run]
+args = ["bash", "-c", "cd artifacts/avbob-backend && uvicorn main:app --host 0.0.0.0 --port 5000 --workers 1"]
+
+[services.production.run.env]
+PORT = "5000"
+
+[services.production.health.startup]
+path = "/health"

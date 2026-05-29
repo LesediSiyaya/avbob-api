@@ -1,45 +1,79 @@
-# [Project name]
+# AVBOB Lead Assistant
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+AI-powered funeral insurance lead detection and CRM for AVBOB consultants in South Africa.
+
+## Architecture
+
+```
+React PWA (zip-hub--lesedisiyaya.replit.app)
+        ↓  /api/*
+TypeScript API Server  (port 8080, path: /api)
+        ↓  proxy → strip /api prefix
+Python FastAPI Backend  (port 5000)
+        ↓
+PostgreSQL (Supabase)  +  OpenAI
+        ↑
+Facebook Page API (auto-polled every 10 min using token from Supabase)
+```
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- **AVBOB Backend** workflow — runs the Python FastAPI backend on port 5000
+- **API Server** workflow — runs the TypeScript proxy server on port 8080 (routes `/api/*` to port 5000)
+- Backend URL (deployed): configure via Replit deployment
+- Backend URL (dev): `https://$REPLIT_DEV_DOMAIN/api`
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- **Proxy**: TypeScript / Express (routes `/api/*` → Python backend)
+- **Backend**: Python 3.11, FastAPI, uvicorn
+- **AI**: OpenAI `gpt-4o-mini` (primary) / keyword scoring (fallback)
+- **Database**: PostgreSQL via psycopg2 (Supabase)
+- **Frontend**: React PWA at `zip-hub--lesedisiyaya.replit.app`
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/api-server/` — TypeScript proxy (proxies `/api/*` to Python backend)
+- `artifacts/avbob-backend/` — Python FastAPI backend (main entry point: `main.py`)
+- `artifacts/avbob-backend/routes/` — API route handlers
+- `artifacts/avbob-backend/ai/` — OpenAI / Ollama AI engine
+- `artifacts/avbob-backend/database.py` — PostgreSQL CRUD (uses `SUPABASE_DATABASE_URL`)
+- `artifacts/avbob-backend/models.py` — Pydantic request/response models
 
-## Architecture decisions
+## API Endpoints
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+All accessible via the TypeScript proxy at `/api` prefix:
 
-## Product
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/health` | Health check |
+| GET | `/api/get-leads` | List all leads |
+| POST | `/api/save-lead` | Score + persist a lead |
+| POST | `/api/analyze-lead` | AI-score a post |
+| POST | `/api/generate-reply` | AI-generate Facebook reply |
+| POST | `/api/whatsapp-link` | Generate WhatsApp follow-up |
+| POST | `/api/update-status/{id}` | Update lead status |
+| GET | `/api/stats` | Lead statistics |
+| GET | `/api/dashboard` | HTML dashboard |
+| POST | `/api/facebook/poll` | Manually trigger FB page poll |
+| GET/POST | `/api/settings` | Token management |
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+## Required Environment Secrets
 
-## User preferences
+| Secret | Description |
+|--------|-------------|
+| `SUPABASE_DATABASE_URL` | PostgreSQL connection string (Supabase) |
+| `OPENAI_API_KEY` | OpenAI key for AI scoring (optional — falls back to keyword scoring) |
+| `FB_PAGE_ACCESS_TOKEN` | Facebook Page token for auto-polling (optional, also stored in Supabase settings) |
+| `FB_VERIFY_TOKEN` | Facebook webhook verify token (optional) |
+
+## Architecture Decisions
+
+- TypeScript API Server acts as a thin proxy — all AVBOB logic stays in Python.
+- CORS on the Python backend is `allow_origins=["*"]`; the proxy adds its own CORS headers too.
+- Facebook tokens are stored in Supabase settings table and loaded at startup — no extension needed.
+- Chrome extension has been removed; Facebook polling runs automatically from the backend.
+
+## User Preferences
 
 _Populate as you build — explicit user instructions worth remembering across sessions._
-
-## Gotchas
-
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
